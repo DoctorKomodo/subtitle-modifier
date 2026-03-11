@@ -142,7 +142,9 @@ class TestConvertText:
         """Input that's already sentence case should not be mangled."""
         text = "John went to Paris."
         result = convert_text(text, nlp)
-        assert result.lower() == text.lower()
+        assert result == text, (
+            f"Sentence-case input was mangled!\n  Input:  {text}\n  Output: {result}"
+        )
 
     def test_wording_never_changes(self, nlp):
         """Only casing should change, never the words themselves."""
