@@ -31,13 +31,50 @@ def main(argv: list[str] | None = None) -> None:
         help="Preview changes without writing files.",
     )
     parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Show debug logging (e.g. raw LLM responses on parse failures).",
+    )
+    parser.add_argument(
         "--benchmark",
         nargs="+",
         metavar="MODEL",
         help="Benchmark one or more spaCy models and print a speed comparison table.",
     )
 
+    # LLM mode arguments
+    llm_group = parser.add_argument_group("LLM mode", "Use an LLM instead of spaCy NER for recasing.")
+    llm_group.add_argument(
+        "--llm",
+        action="store_true",
+        help="Enable LLM mode (uses OpenAI-compatible API instead of spaCy).",
+    )
+    llm_group.add_argument(
+        "--llm-model",
+        help="LLM model name (required when --llm is used).",
+    )
+    llm_group.add_argument(
+        "--llm-url",
+        default="http://localhost:11434/v1",
+        help="Base URL for OpenAI-compatible API (default: http://localhost:11434/v1 for Ollama).",
+    )
+    llm_group.add_argument(
+        "--llm-api-key",
+        default=None,
+        help="API key (default: OPENAI_API_KEY env var, falls back to 'ollama').",
+    )
+    llm_group.add_argument(
+        "--llm-batch-size",
+        type=int,
+        default=50,
+        help="Number of subtitle events per LLM API call (default: 50).",
+    )
+
     args = parser.parse_args(argv)
+
+    if args.verbose:
+        import logging
+        logging.basicConfig(level=logging.DEBUG, format="%(name)s %(levelname)s: %(message)s")
 
     # Expand glob patterns
     input_files = []
@@ -59,20 +96,49 @@ def main(argv: list[str] | None = None) -> None:
         print_results(results, len(input_files))
         return
 
-    # Lazy-load spaCy after argument parsing (heavy import)
-    import spacy
-
     from .subtitle_io import process_file
 
-    try:
-        nlp = spacy.load(args.model)
-    except OSError:
-        print(
-            f"Error: spaCy model '{args.model}' not found. "
-            f"Install it with: python -m spacy download {args.model}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    # Set up conversion backend
+    convert_fn = None
+    nlp = None
+
+    if args.llm:
+        if not args.llm_model:
+            print("Error: --llm-model is required when using --llm mode.", file=sys.stderr)
+            sys.exit(1)
+
+        try:
+            import openai
+        except ImportError:
+            print(
+                "Error: openai package not installed. "
+                "Install it with: pip install 'subtitle-modifier[llm]'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        import os
+
+        from .llm import convert_texts_llm
+
+        api_key = args.llm_api_key or os.environ.get("OPENAI_API_KEY", "ollama")
+        client = openai.OpenAI(base_url=args.llm_url, api_key=api_key)
+
+        def convert_fn(texts, _client=client, _model=args.llm_model, _bs=args.llm_batch_size):
+            return convert_texts_llm(texts, _client, _model, batch_size=_bs)
+    else:
+        # Lazy-load spaCy (heavy import)
+        import spacy
+
+        try:
+            nlp = spacy.load(args.model)
+        except OSError:
+            print(
+                f"Error: spaCy model '{args.model}' not found. "
+                f"Install it with: python -m spacy download {args.model}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     for filepath in input_files:
         input_p = Path(filepath)
@@ -89,7 +155,9 @@ def main(argv: list[str] | None = None) -> None:
 
         print(f"Processing: {filepath}")
         try:
-            changes = process_file(filepath, output_path, nlp, dry_run=args.dry_run)
+            changes = process_file(
+                filepath, output_path, nlp, convert_fn=convert_fn, dry_run=args.dry_run,
+            )
         except Exception as e:
             print(f"  Error: {e}", file=sys.stderr)
             continue

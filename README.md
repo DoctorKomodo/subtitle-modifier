@@ -1,6 +1,6 @@
 # subtitle-modifier
 
-A CLI tool that converts ALL-UPPERCASE subtitle text to sentence case while preserving proper noun capitalization using spaCy NER. Supports SRT and ASS/SSA formats.
+A CLI tool that converts ALL-UPPERCASE subtitle text to sentence case while preserving proper noun capitalization. Supports SRT and ASS/SSA formats. Two backends available: spaCy NER (local, fast) or any OpenAI-compatible LLM (more accurate proper nouns and abbreviations).
 
 ## Installation
 
@@ -9,7 +9,21 @@ pip install -e .
 python -m spacy download en_core_web_sm
 ```
 
+For LLM mode (optional):
+
+```bash
+pip install -e ".[llm]"
+```
+
+On Windows, if `pip` is not on your PATH, use `python -m pip` instead:
+
+```bash
+python -m pip install -e .
+```
+
 ## Usage
+
+### spaCy mode (default)
 
 ```bash
 # Convert a single file (saves as movie_converted.srt alongside the original)
@@ -28,6 +42,26 @@ subtitle-modifier movie.srt --dry-run
 subtitle-modifier movie.srt --model en_core_web_trf
 ```
 
+### LLM mode
+
+Uses an OpenAI-compatible API (Ollama, OpenAI, Venice, etc.) instead of spaCy for recasing. Better at handling proper nouns, abbreviations (D.E.A., POTUS), and context-dependent capitalization.
+
+```bash
+# Use with Ollama (default URL: http://localhost:11434/v1)
+subtitle-modifier movie.ass --llm --llm-model llama3.2
+
+# Use with a remote API
+subtitle-modifier movie.ass --llm --llm-model gpt-4o \
+  --llm-url https://api.openai.com/v1 \
+  --llm-api-key sk-...
+
+# Adjust batch size (default: 50 subtitles per API call)
+subtitle-modifier movie.ass --llm --llm-model llama3.2 --llm-batch-size 25
+
+# Debug LLM responses
+subtitle-modifier movie.ass --llm --llm-model llama3.2 --verbose --dry-run
+```
+
 ## Options
 
 | Flag | Description |
@@ -35,9 +69,17 @@ subtitle-modifier movie.srt --model en_core_web_trf
 | `-o`, `--output` | Output directory (default: save alongside input with `_converted` suffix) |
 | `--model` | spaCy model for NER (default: `en_core_web_sm`) |
 | `--dry-run` | Preview changes without writing files |
+| `-v`, `--verbose` | Show debug logging (e.g. raw LLM responses on parse failures) |
 | `--benchmark MODEL [MODEL ...]` | Benchmark spaCy models and print a speed comparison |
+| `--llm` | Enable LLM mode (skips spaCy entirely) |
+| `--llm-model` | LLM model name (required with `--llm`) |
+| `--llm-url` | API base URL (default: `http://localhost:11434/v1` for Ollama) |
+| `--llm-api-key` | API key (default: `OPENAI_API_KEY` env var, falls back to `ollama`) |
+| `--llm-batch-size` | Subtitles per API call (default: 50) |
 
 ## How it works
+
+### spaCy mode
 
 1. Parses the subtitle file (SRT or ASS/SSA via pysubs2)
 2. Strips any ASS override tags to get plain text
@@ -45,6 +87,14 @@ subtitle-modifier movie.srt --model en_core_web_trf
 4. Applies sentence-case capitalization (first letter of each sentence, standalone "I")
 5. Re-capitalizes detected proper nouns
 6. Reinserts ASS tags and writes the output file
+
+### LLM mode
+
+1. Parses the subtitle file and strips ASS override tags
+2. Lowercases text (preserving `\N` markers) and batches subtitles
+3. Sends each batch to the LLM as numbered lines for recasing
+4. Validates the wording invariant (only casing may change) — falls back to sentence case on violation
+5. Reinserts ASS tags and writes the output file
 
 Only casing is changed — wording is never modified.
 
@@ -64,6 +114,6 @@ This prints a table showing model load time, processing time, and throughput (su
 
 ## Limitations
 
-- English-only (uses English spaCy models)
-- NER may miss some proper nouns or acronyms depending on context
-- For better accuracy, use a transformer-based model (`en_core_web_trf`) at the cost of speed
+- English-only (uses English spaCy models / English prompts)
+- **spaCy mode**: NER may miss some proper nouns or acronyms depending on context. Use `en_core_web_trf` for better accuracy at the cost of speed.
+- **LLM mode**: Quality depends on the model. Some models may mangle `\N` markers or make unwanted punctuation changes — the wording invariant check catches these and falls back to sentence case.

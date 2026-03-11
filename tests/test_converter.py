@@ -90,9 +90,40 @@ class TestToSentenceCase:
         result = to_sentence_case("I'M GOING AND I'LL BE BACK")
         assert result == "I'm going and I'll be back"
 
-    def test_ass_newline(self):
-        result = to_sentence_case("HELLO WORLD\\NHOW ARE YOU")
-        assert result == "Hello world\\NHow are you"
+    def test_newline_mid_sentence(self):
+        """Newline is not a sentence boundary."""
+        result = to_sentence_case("WHY ARE WE SITTING\nHERE")
+        assert result == "Why are we sitting\nhere"
+
+    def test_newline_after_sentence_end(self):
+        """Capitalize after newline only if previous line ended a sentence."""
+        result = to_sentence_case("HELLO WORLD.\nHOW ARE YOU")
+        assert result == "Hello world.\nHow are you"
+
+    def test_standalone_i_after_newline(self):
+        """Standalone I must be capitalized even after newline."""
+        result = to_sentence_case("BILLY,\nI'M NOT TALKING ABOUT THIS.")
+        assert result == "Billy,\nI'm not talking about this."
+
+    def test_am_pm_abbreviation(self):
+        result = to_sentence_case("5:00 A.M. TO 6:00 A.M.")
+        assert result == "5:00 a.m. to 6:00 a.m."
+
+    def test_acronym_abbreviation(self):
+        result = to_sentence_case("D.E.A. SUSPECTED DRUGS")
+        assert result == "D.e.a. suspected drugs"
+
+    def test_honorific_period(self):
+        result = to_sentence_case("MR. MCGARRY")
+        assert result == "Mr. mcgarry"
+
+    def test_real_sentence_after_multichar_word(self):
+        result = to_sentence_case("HELLO WORLD. HOW ARE YOU?")
+        assert result == "Hello world. How are you?"
+
+    def test_ellipsis(self):
+        result = to_sentence_case("WAIT... WHAT?")
+        assert result == "Wait... What?"
 
     def test_empty_string(self):
         result = to_sentence_case("")
@@ -132,6 +163,30 @@ class TestConvertText:
         # John and Paris should be capitalized (NER on title-cased text)
         assert "John" in result
         assert "Paris" in result
+
+    def test_named_entity_after_newline(self, nlp):
+        """Entities after \\N must not have offset-shifted capitalization."""
+        result = convert_text("LEFT HAVANA THIS MORNING.\\NJOHN WENT TO PARIS.", nlp)
+        assert result.lower() == "left havana this morning.\\njohn went to paris."
+        # Havana should be cleanly capitalized, not "hAvana"
+        if "havana" not in result.lower():
+            pass  # entity not in text
+        assert "hAvana" not in result, f"Offset bug: got {result!r}"
+        assert "pAris" not in result, f"Offset bug: got {result!r}"
+
+    def test_newline_mid_sentence(self, nlp):
+        """\\N is a visual line break, not a sentence boundary."""
+        result = convert_text("WHY ARE WE SITTING\\NHERE? YOU SAT DOWN.", nlp)
+        assert "\\N" in result
+        assert result.startswith("Why are we sitting\\N")
+        # 'here' should NOT be capitalized — mid-sentence
+        after_newline = result.split("\\N")[1]
+        assert after_newline[0] == "h"
+
+    def test_standalone_i_after_newline(self, nlp):
+        """Standalone I must be capitalized after \\N."""
+        result = convert_text("BILLY,\\NI'M NOT TALKING ABOUT THIS.", nlp)
+        assert "\\NI'm" in result
 
     def test_multiple_sentences(self, nlp):
         result = convert_text("HELLO. GOODBYE.", nlp)

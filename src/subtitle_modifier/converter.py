@@ -2,6 +2,11 @@
 
 import re
 
+_HONORIFICS = frozenset({
+    "mr", "mrs", "ms", "dr", "st", "sr", "jr", "vs", "etc",
+    "gov", "sgt", "gen", "col", "rev",
+})
+
 
 def strip_ass_tags(text: str) -> tuple[str, list[tuple[int, str]]]:
     """Remove ASS override tags ({...}) from text.
@@ -52,18 +57,9 @@ def to_sentence_case(text: str) -> str:
     - First letter after sentence-ending punctuation (. ! ?)
     - Standalone "I" (the pronoun)
 
-    Handles \\N (ASS newline) as a line break.
+    Expects \\N to already be replaced with real newlines.
     """
-    # Split on \N first to preserve the literal string, then lowercase each line
-    lines = text.split("\\N")
-    lines = [line.lower() for line in lines]
-    processed_lines = []
-
-    for line in lines:
-        line = _capitalize_sentences(line)
-        processed_lines.append(line)
-
-    result = "\\N".join(processed_lines)
+    result = _capitalize_sentences(text.lower())
 
     # Capitalize standalone "I"
     result = re.sub(r"(?<![a-zA-Z])i(?![a-zA-Z])", "I", result)
@@ -71,8 +67,37 @@ def to_sentence_case(text: str) -> str:
     return result
 
 
+def _is_abbreviation_period(text: str, dot_pos: int) -> bool:
+    """Check whether the period at dot_pos is part of an abbreviation.
+
+    Two rules:
+    1. Single-letter-dot: the character before the period is a single letter
+       (preceded by a non-alpha character or the start of the string).
+    2. Known honorific: the word before the period is in _HONORIFICS.
+    """
+    if dot_pos == 0:
+        return False
+
+    # Rule 1: single letter before the dot
+    before = text[dot_pos - 1]
+    if before.isalpha():
+        if dot_pos - 1 == 0 or not text[dot_pos - 2].isalpha():
+            return True
+
+        # Rule 2: known honorific
+        # Walk back to find the start of the word
+        word_start = dot_pos - 1
+        while word_start > 0 and text[word_start - 1].isalpha():
+            word_start -= 1
+        word = text[word_start:dot_pos]
+        if word.lower() in _HONORIFICS:
+            return True
+
+    return False
+
+
 def _capitalize_sentences(text: str) -> str:
-    """Capitalize the first letter of each sentence in a line."""
+    """Capitalize the first letter of each sentence."""
     if not text:
         return text
 
@@ -83,8 +108,13 @@ def _capitalize_sentences(text: str) -> str:
         if capitalize_next and ch.isalpha():
             result[i] = ch.upper()
             capitalize_next = False
-        elif ch in ".!?":
+        elif capitalize_next and ch.isdigit():
+            capitalize_next = False
+        elif ch in "!?":
             capitalize_next = True
+        elif ch == ".":
+            if not _is_abbreviation_period(text, i):
+                capitalize_next = True
 
     return "".join(result)
 
@@ -93,11 +123,11 @@ def _capitalize_sentences(text: str) -> str:
 def convert_text(text: str, nlp) -> str:
     """Full conversion pipeline for a single subtitle event's text.
 
-    1. Strip ASS tags
-    2. Run NER on title-cased text (spaCy needs proper casing for accuracy)
+    1. Strip ASS tags and \\N newline markers
+    2. Run NER on lowercased text
     3. Apply sentence case
     4. Re-capitalize NER-detected proper nouns
-    5. Reinsert ASS tags
+    5. Reinsert \\N markers and ASS tags
     """
     if not text or not text.strip():
         return text
@@ -107,11 +137,14 @@ def convert_text(text: str, nlp) -> str:
     if not plain.strip():
         return text
 
-    # Run NER on lowercased text. While spaCy is trained on mixed-case,
-    # lowercase still gives good entity detection and avoids false positives
-    # that title-casing causes (e.g. "John Went" detected as single PERSON).
-    lower_version = plain.lower()
-    spacy_text = lower_version.replace("\\N", "\n")
+    # Replace \N (ASS visual line break) with real newlines up front
+    # so all downstream processing works on clean text without
+    # worrying about the 2-char \N sequence.
+    plain = plain.replace("\\N", "\n")
+
+    # Run NER on lowercased text. Lowercase avoids false positives
+    # that title-casing causes (e.g. "John Went" as single PERSON).
+    spacy_text = plain.lower()
     doc = nlp(spacy_text)
 
     # Collect character spans from NER entities with proper-noun labels only.
@@ -129,7 +162,7 @@ def convert_text(text: str, nlp) -> str:
 
     # Re-capitalize the proper noun spans detected by NER
     if proper_spans:
-        chars = list(sentence_cased.replace("\\N", "\n"))
+        chars = list(sentence_cased)
         for start, end in proper_spans:
             i = start
             cap_next = True
@@ -141,7 +174,8 @@ def convert_text(text: str, nlp) -> str:
                 elif chars[i].isspace() or chars[i] == "-":
                     cap_next = True
                 i += 1
-        sentence_cased = "".join(chars).replace("\n", "\\N")
+        sentence_cased = "".join(chars)
 
-    # Reinsert any ASS tags
+    # Restore \N markers and reinsert ASS tags
+    sentence_cased = sentence_cased.replace("\n", "\\N")
     return reinsert_ass_tags(sentence_cased, tags)
