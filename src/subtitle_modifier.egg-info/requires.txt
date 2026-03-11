@@ -1,5 +1,0 @@
-pysubs2>=1.7.0
-spacy>=3.5.0
-
-[dev]
-pytest>=7.0

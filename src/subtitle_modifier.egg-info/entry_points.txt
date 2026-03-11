@@ -1,2 +1,0 @@
-[console_scripts]
-subtitle-modifier = subtitle_modifier.cli:main
