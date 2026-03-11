@@ -1,9 +1,13 @@
 """Integration tests using pysubs2 to process subtitle strings."""
 
+import tempfile
+from pathlib import Path
+
 import pytest
 import spacy
 import pysubs2
 
+from subtitle_modifier.benchmark import run_benchmark
 from subtitle_modifier.converter import convert_text
 
 
@@ -113,3 +117,35 @@ class TestAssIntegration:
         output = subs.to_string("ass")
         assert "[Script Info]" in output
         assert "Dialogue:" in output
+
+
+class TestBenchmark:
+    def test_benchmark_single_model(self):
+        """Benchmark runs and returns results for an installed model."""
+        with tempfile.NamedTemporaryFile(suffix=".srt", mode="w", delete=False) as f:
+            f.write(SRT_CONTENT)
+            srt_path = f.name
+
+        try:
+            results = run_benchmark([srt_path], ["en_core_web_sm"])
+            assert len(results) == 1
+            r = results[0]
+            assert r.model == "en_core_web_sm"
+            assert r.load_time > 0
+            assert r.process_time > 0
+            assert r.subtitle_count == 3
+            assert r.subs_per_sec > 0
+        finally:
+            Path(srt_path).unlink()
+
+    def test_benchmark_skips_missing_model(self):
+        """Benchmark gracefully skips models that aren't installed."""
+        with tempfile.NamedTemporaryFile(suffix=".srt", mode="w", delete=False) as f:
+            f.write(SRT_CONTENT)
+            srt_path = f.name
+
+        try:
+            results = run_benchmark([srt_path], ["nonexistent_model_xyz"])
+            assert len(results) == 0
+        finally:
+            Path(srt_path).unlink()
