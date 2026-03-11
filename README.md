@@ -35,6 +35,7 @@ subtitle-modifier movie.srt --model en_core_web_trf
 | `-o`, `--output` | Output directory (default: save alongside input with `_converted` suffix) |
 | `--model` | spaCy model for NER (default: `en_core_web_sm`) |
 | `--dry-run` | Preview changes without writing files |
+| `--benchmark MODEL [MODEL ...]` | Benchmark spaCy models and print a speed comparison |
 
 ## How it works
 
@@ -46,6 +47,20 @@ subtitle-modifier movie.srt --model en_core_web_trf
 6. Reinserts ASS tags and writes the output file
 
 Only casing is changed — wording is never modified.
+
+## Benchmarking
+
+Compare processing speed across different spaCy models:
+
+```bash
+# Benchmark a single model
+subtitle-modifier movie.srt --benchmark en_core_web_sm
+
+# Compare multiple models
+subtitle-modifier movie.srt --benchmark en_core_web_sm en_core_web_md en_core_web_trf
+```
+
+This prints a table showing model load time, processing time, and throughput (subtitles/sec) for each model. No output files are written in benchmark mode.
 
 ## Limitations
 

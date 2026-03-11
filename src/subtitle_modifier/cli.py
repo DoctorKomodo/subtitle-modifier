@@ -30,6 +30,12 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Preview changes without writing files.",
     )
+    parser.add_argument(
+        "--benchmark",
+        nargs="+",
+        metavar="MODEL",
+        help="Benchmark one or more spaCy models and print a speed comparison table.",
+    )
 
     args = parser.parse_args(argv)
 
@@ -44,6 +50,14 @@ def main(argv: list[str] | None = None) -> None:
     if not input_files:
         print("Error: no input files found.", file=sys.stderr)
         sys.exit(1)
+
+    # Benchmark mode
+    if args.benchmark:
+        from .benchmark import print_results, run_benchmark
+
+        results = run_benchmark(input_files, args.benchmark)
+        print_results(results, len(input_files))
+        return
 
     # Lazy-load spaCy after argument parsing (heavy import)
     import spacy
