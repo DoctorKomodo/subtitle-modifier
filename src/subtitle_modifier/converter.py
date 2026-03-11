@@ -107,18 +107,22 @@ def convert_text(text: str, nlp) -> str:
     if not plain.strip():
         return text
 
-    # Run NER on title-cased text for better model accuracy
-    # (spaCy performs poorly on all-uppercase or all-lowercase text)
-    title_version = plain.title()
-    spacy_text = title_version.replace("\\N", "\n")
+    # Run NER on lowercased text. While spaCy is trained on mixed-case,
+    # lowercase still gives good entity detection and avoids false positives
+    # that title-casing causes (e.g. "John Went" detected as single PERSON).
+    lower_version = plain.lower()
+    spacy_text = lower_version.replace("\\N", "\n")
     doc = nlp(spacy_text)
 
-    # Collect character spans from NER entities only.
-    # We intentionally skip PROPN POS tags here because title-casing
-    # the input causes too many false positives (e.g. "World" tagged as PROPN).
+    # Collect character spans from NER entities with proper-noun labels only.
+    _NER_LABELS = {
+        "PERSON", "GPE", "ORG", "NORP", "FAC",
+        "LOC", "EVENT", "WORK_OF_ART", "LAW", "LANGUAGE",
+    }
     proper_spans = set()
     for ent in doc.ents:
-        proper_spans.add((ent.start_char, ent.end_char))
+        if ent.label_ in _NER_LABELS:
+            proper_spans.add((ent.start_char, ent.end_char))
 
     # Apply sentence case
     sentence_cased = to_sentence_case(plain)
