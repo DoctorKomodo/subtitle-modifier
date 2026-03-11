@@ -3,7 +3,11 @@
 import logging
 import re
 
-from .converter import reinsert_ass_tags, strip_ass_tags, to_sentence_case
+from .converter import (
+    reinsert_ass_tags,
+    strip_ass_tags,
+    to_sentence_case,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +19,7 @@ The output must be identical to the input except for letter casing.
 Rules:
 - Sentence case: capitalize first letter of each sentence
 - Capitalize proper nouns, names, places, and abbreviations (e.g. D.E.A., U.S.)
-- \\N is a visual line break, NOT a sentence boundary. Do not capitalize after \\N unless it starts a new sentence or is a proper noun
+- \\N is a visual line break marker, NOT a sentence boundary — do not treat it as one
 - Return ONLY the numbered lines in the same format"""
 
 _LINE_RE = re.compile(r"^(\d+):\s?(.*)", re.MULTILINE)
@@ -24,13 +28,37 @@ _LINE_RE = re.compile(r"^(\d+):\s?(.*)", re.MULTILINE)
 _CODE_FENCE_RE = re.compile(r"^```\w*\n?(.*?)```\s*$", re.DOTALL)
 
 
-def _lowercase_preserving_markers(text: str) -> str:
-    """Lowercase text while preserving \\N markers (ASS line breaks).
+def _strip_newline_markers(text: str) -> tuple[str, list[int]]:
+    """Replace \\N markers with a space, recording their character positions."""
+    positions = []
+    parts = []
+    pos = 0
+    i = 0
+    while i < len(text):
+        if text[i:i+2] == "\\N":
+            positions.append(pos)
+            parts.append(" ")
+            pos += 1
+            i += 2
+        else:
+            parts.append(text[i])
+            pos += 1
+            i += 1
+    return "".join(parts), positions
 
-    Plain .lower() would turn \\N into \\n, which LLMs may misinterpret
-    as a newline escape.
-    """
-    return "\\N".join(part.lower() for part in text.split("\\N"))
+
+def _reinsert_newline_markers(text: str, positions: list[int]) -> str:
+    """Reinsert \\N markers, replacing the space at each recorded position."""
+    if not positions:
+        return text
+    result = []
+    prev = 0
+    for pos in positions:
+        result.append(text[prev:pos])
+        result.append("\\N")
+        prev = pos + 1  # skip the space that \N replaced
+    result.append(text[prev:])
+    return "".join(result)
 
 
 def _build_prompt(texts: list[str]) -> str:
@@ -81,7 +109,7 @@ def recase_batch(texts: list[str], client, model: str) -> list[str]:
     """Send a batch of texts to the LLM for recasing.
 
     Args:
-        texts: Pre-processed (tag-stripped, lowercased) subtitle texts.
+        texts: Pre-processed (tag-stripped, lowercased) subtitle lines.
         client: An OpenAI-compatible client instance.
         model: Model name to use.
 
@@ -138,8 +166,9 @@ def convert_texts_llm(
 ) -> list[str]:
     """Full LLM conversion pipeline for a list of subtitle event texts.
 
-    For each text: strip ASS tags -> lowercase -> batch LLM recase ->
-    validate wording invariant -> reinsert ASS tags.
+    For each text: strip ASS tags -> strip \\N markers -> lowercase ->
+    batch LLM recase -> validate wording invariant ->
+    reinsert \\N markers -> reinsert ASS tags.
 
     Args:
         texts: Raw subtitle event texts (may contain ASS tags).
@@ -153,14 +182,17 @@ def convert_texts_llm(
     if not texts:
         return []
 
-    # Pre-process: strip tags and lowercase (preserving \N markers)
+    # Pre-process: strip tags, strip \N markers, then lowercase
     stripped = []
     tag_data = []
+    newline_data = []
     for text in texts:
         plain, tags = strip_ass_tags(text)
-        lowered = _lowercase_preserving_markers(plain)
+        no_markers, positions = _strip_newline_markers(plain)
+        lowered = no_markers.lower()
         stripped.append(lowered)
         tag_data.append(tags)
+        newline_data.append(positions)
 
     # Batch and recase
     recased = []
@@ -169,16 +201,15 @@ def convert_texts_llm(
         batch_results = recase_batch(batch, client, model)
         recased.extend(batch_results)
 
-    # Validate wording invariant and reinsert tags
-    results = []
-    for i, (original_lowered, result_text, tags) in enumerate(
-        zip(stripped, recased, tag_data)
-    ):
-        # Normalize \N casing for comparison (LLM might return \n or \N)
-        orig_normalized = original_lowered.replace("\\N", "\\n")
-        result_normalized = result_text.replace("\\N", "\\n")
+    # Strip trailing whitespace the LLM may have added
+    recased = [line.rstrip() for line in recased]
 
-        if result_normalized.lower() != orig_normalized.lower():
+    # Validate wording invariant, reinsert \N markers and ASS tags
+    results = []
+    for i, (original_lowered, result_text, positions, tags) in enumerate(
+        zip(stripped, recased, newline_data, tag_data)
+    ):
+        if result_text.lower() != original_lowered:
             logger.warning(
                 "LLM altered wording for event %d, falling back to sentence case. "
                 "Input: %r | Output: %r",
@@ -188,6 +219,7 @@ def convert_texts_llm(
             )
             result_text = to_sentence_case(original_lowered)
 
+        result_text = _reinsert_newline_markers(result_text, positions)
         results.append(reinsert_ass_tags(result_text, tags))
 
     return results
