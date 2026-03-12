@@ -19,7 +19,8 @@ The output must be identical to the input except for letter casing.
 Rules:
 - Sentence case: capitalize first letter of each sentence
 - Capitalize proper nouns, names, places, and abbreviations (e.g. D.E.A., U.S.)
-- \\N is a visual line break marker, NOT a sentence boundary — do not treat it as one
+- Preserve spacing exactly — do not collapse, add, or remove spaces \
+(e.g. "he went to the store" must NOT become "he went to  the store" or "he went to thestore")
 - Return ONLY the numbered lines in the same format"""
 
 _LINE_RE = re.compile(r"^(\d+):\s?(.*)", re.MULTILINE)
