@@ -49,6 +49,39 @@ def reinsert_ass_tags(plain: str, tags: list[tuple[int, str]]) -> str:
     return "".join(result)
 
 
+def strip_newline_markers(text: str) -> tuple[str, list[int]]:
+    """Replace \\N markers with a space, recording their character positions."""
+    positions: list[int] = []
+    parts: list[str] = []
+    pos = 0
+    i = 0
+    while i < len(text):
+        if text[i:i+2] == "\\N":
+            positions.append(pos)
+            parts.append(" ")
+            pos += 1
+            i += 2
+        else:
+            parts.append(text[i])
+            pos += 1
+            i += 1
+    return "".join(parts), positions
+
+
+def reinsert_newline_markers(text: str, positions: list[int]) -> str:
+    """Reinsert \\N markers, replacing the space at each recorded position."""
+    if not positions:
+        return text
+    result: list[str] = []
+    prev = 0
+    for pos in positions:
+        result.append(text[prev:pos])
+        result.append("\\N")
+        prev = pos + 1  # skip the space that \N replaced
+    result.append(text[prev:])
+    return "".join(result)
+
+
 def to_sentence_case(text: str) -> str:
     """Convert text to sentence case.
 
@@ -56,8 +89,6 @@ def to_sentence_case(text: str) -> str:
     - First character of the text
     - First letter after sentence-ending punctuation (. ! ?)
     - Standalone "I" (the pronoun)
-
-    Expects \\N to already be replaced with real newlines.
     """
     result = _capitalize_sentences(text.lower())
 
@@ -137,10 +168,9 @@ def convert_text(text: str, nlp) -> str:
     if not plain.strip():
         return text
 
-    # Replace \N (ASS visual line break) with real newlines up front
-    # so all downstream processing works on clean text without
-    # worrying about the 2-char \N sequence.
-    plain = plain.replace("\\N", "\n")
+    # Replace \N (ASS visual line break) with a space, recording positions
+    # so markers can be reinserted after casing changes.
+    plain, newline_positions = strip_newline_markers(plain)
 
     # Run NER on lowercased text. Lowercase avoids false positives
     # that title-casing causes (e.g. "John Went" as single PERSON).
@@ -177,5 +207,5 @@ def convert_text(text: str, nlp) -> str:
         sentence_cased = "".join(chars)
 
     # Restore \N markers and reinsert ASS tags
-    sentence_cased = sentence_cased.replace("\n", "\\N")
+    sentence_cased = reinsert_newline_markers(sentence_cased, newline_positions)
     return reinsert_ass_tags(sentence_cased, tags)

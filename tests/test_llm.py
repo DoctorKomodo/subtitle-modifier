@@ -4,11 +4,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from subtitle_modifier.converter import (
+    reinsert_newline_markers,
+    strip_newline_markers,
+)
 from subtitle_modifier.llm import (
     _build_prompt,
     _parse_response,
-    _reinsert_newline_markers,
-    _strip_newline_markers,
     convert_texts_llm,
     recase_batch,
 )
@@ -82,62 +84,62 @@ class TestParseResponse:
 
 class TestStripNewlineMarkers:
     def test_no_markers(self):
-        text, positions = _strip_newline_markers("hello world")
+        text, positions = strip_newline_markers("hello world")
         assert text == "hello world"
         assert positions == []
 
     def test_single_marker(self):
-        text, positions = _strip_newline_markers("hello\\Nworld")
+        text, positions = strip_newline_markers("hello\\Nworld")
         assert text == "hello world"
         assert positions == [5]
 
     def test_multiple_markers(self):
-        text, positions = _strip_newline_markers("a\\Nb\\Nc")
+        text, positions = strip_newline_markers("a\\Nb\\Nc")
         assert text == "a b c"
         assert positions == [1, 3]
 
     def test_marker_at_start(self):
-        text, positions = _strip_newline_markers("\\Nhello")
+        text, positions = strip_newline_markers("\\Nhello")
         assert text == " hello"
         assert positions == [0]
 
     def test_marker_at_end(self):
-        text, positions = _strip_newline_markers("hello\\N")
+        text, positions = strip_newline_markers("hello\\N")
         assert text == "hello "
         assert positions == [5]
 
     def test_roundtrip(self):
         original = "hello\\Nworld\\Nfoo"
-        text, positions = _strip_newline_markers(original)
-        restored = _reinsert_newline_markers(text, positions)
+        text, positions = strip_newline_markers(original)
+        restored = reinsert_newline_markers(text, positions)
         assert restored == original
 
     def test_space_before_marker(self):
         """Existing space before \\N is preserved."""
-        text, positions = _strip_newline_markers("hello \\Nworld")
+        text, positions = strip_newline_markers("hello \\Nworld")
         assert text == "hello  world"
         assert positions == [6]
 
 
 class TestReinsertNewlineMarkers:
     def test_no_positions(self):
-        assert _reinsert_newline_markers("hello", []) == "hello"
+        assert reinsert_newline_markers("hello", []) == "hello"
 
     def test_single_position(self):
-        assert _reinsert_newline_markers("hello world", [5]) == "hello\\Nworld"
+        assert reinsert_newline_markers("hello world", [5]) == "hello\\Nworld"
 
     def test_multiple_positions(self):
-        assert _reinsert_newline_markers("a b c", [1, 3]) == "a\\Nb\\Nc"
+        assert reinsert_newline_markers("a b c", [1, 3]) == "a\\Nb\\Nc"
 
     def test_position_at_start(self):
-        assert _reinsert_newline_markers(" hello", [0]) == "\\Nhello"
+        assert reinsert_newline_markers(" hello", [0]) == "\\Nhello"
 
     def test_position_at_end(self):
-        assert _reinsert_newline_markers("hello ", [5]) == "hello\\N"
+        assert reinsert_newline_markers("hello ", [5]) == "hello\\N"
 
     def test_space_before_marker_preserved(self):
         """Space adjacent to the \\N position is kept."""
-        assert _reinsert_newline_markers("hello  world", [6]) == "hello \\Nworld"
+        assert reinsert_newline_markers("hello  world", [6]) == "hello \\Nworld"
 
 
 class TestRecaseBatch:
