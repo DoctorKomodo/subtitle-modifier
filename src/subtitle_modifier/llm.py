@@ -5,7 +5,9 @@ import re
 
 from .converter import (
     reinsert_ass_tags,
+    reinsert_newline_markers,
     strip_ass_tags,
+    strip_newline_markers,
     to_sentence_case,
 )
 
@@ -28,38 +30,6 @@ _LINE_RE = re.compile(r"^(\d+):\s?(.*)", re.MULTILINE)
 # Markdown code fences that LLMs sometimes wrap responses in
 _CODE_FENCE_RE = re.compile(r"^```\w*\n?(.*?)```\s*$", re.DOTALL)
 
-
-def _strip_newline_markers(text: str) -> tuple[str, list[int]]:
-    """Replace \\N markers with a space, recording their character positions."""
-    positions = []
-    parts = []
-    pos = 0
-    i = 0
-    while i < len(text):
-        if text[i:i+2] == "\\N":
-            positions.append(pos)
-            parts.append(" ")
-            pos += 1
-            i += 2
-        else:
-            parts.append(text[i])
-            pos += 1
-            i += 1
-    return "".join(parts), positions
-
-
-def _reinsert_newline_markers(text: str, positions: list[int]) -> str:
-    """Reinsert \\N markers, replacing the space at each recorded position."""
-    if not positions:
-        return text
-    result = []
-    prev = 0
-    for pos in positions:
-        result.append(text[prev:pos])
-        result.append("\\N")
-        prev = pos + 1  # skip the space that \N replaced
-    result.append(text[prev:])
-    return "".join(result)
 
 
 def _build_prompt(texts: list[str]) -> str:
@@ -189,7 +159,7 @@ def convert_texts_llm(
     newline_data = []
     for text in texts:
         plain, tags = strip_ass_tags(text)
-        no_markers, positions = _strip_newline_markers(plain)
+        no_markers, positions = strip_newline_markers(plain)
         lowered = no_markers.lower()
         stripped.append(lowered)
         tag_data.append(tags)
@@ -220,7 +190,7 @@ def convert_texts_llm(
             )
             result_text = to_sentence_case(original_lowered)
 
-        result_text = _reinsert_newline_markers(result_text, positions)
+        result_text = reinsert_newline_markers(result_text, positions)
         results.append(reinsert_ass_tags(result_text, tags))
 
     return results
