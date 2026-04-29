@@ -139,3 +139,18 @@ class TestParseFailureRetry:
         result = recase_batch_claude(["hello", "world"], client, "claude-haiku-4-5")
         assert result == ["Hello", "World"]
         assert client.messages.create.call_count == 2
+
+
+class TestParseFailureFallback:
+    def test_two_parse_failures_fall_back_to_sentence_case(self):
+        """Both calls return garbage; assert sentence-case fallback and
+        exactly 2 API calls (no infinite retry)."""
+        client = _make_mock_anthropic_client([
+            {"text": "garbage one"},
+            {"text": "garbage two"},
+        ])
+        result = recase_batch_claude(
+            ["hello world", "foo bar"], client, "claude-haiku-4-5"
+        )
+        assert result == ["Hello world", "Foo bar"]
+        assert client.messages.create.call_count == 2
