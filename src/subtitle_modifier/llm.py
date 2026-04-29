@@ -25,6 +25,11 @@ uppercase letters to lowercase (a-z ↔ A-Z). This means:
 - Do NOT move, reorder, or substitute any characters
 - If the input spells a word "wrong" (e.g. "Dewars" without an apostrophe), \
 keep it exactly as "Dewars" — you are not a spellchecker
+- This applies especially to **proper nouns and names**. If a name is spelled \
+with extra, missing, or unusual letters compared to the conventional spelling \
+(e.g. "Donnatella" instead of "Donatella", "Stefani" instead of "Stefanie", \
+"Phillip" instead of "Philip"), keep the input spelling exactly as given. \
+Only change which letters are upper vs. lower case.
 - If the input has unusual spacing (e.g. "( siren )" with spaces inside parentheses), \
 preserve those exact spaces
 
@@ -57,7 +62,10 @@ Input:  2: ( siren continues )
 Output: 2: ( Siren continues )
 
 Input:  3: he went to new york with the F.B.I. and met john.
-Output: 3: He went to New York with the F.B.I. and met John."""
+Output: 3: He went to New York with the F.B.I. and met John.
+
+Input:  4: donnatella moss, when did you start working for me?
+Output: 4: Donnatella Moss, when did you start working for me?"""
 
 _LINE_RE = re.compile(r"^(\d+):\s?(.*)", re.MULTILINE)
 
