@@ -19,7 +19,7 @@ def recase_batch_claude(texts, client, model):
     """Send a batch of texts to Claude for recasing.
 
     Mirrors recase_batch() in llm.py: parse-fail retry once, then
-    sentence-case fallback. (Retry and fallback added in later tasks.)
+    sentence-case fallback for the whole batch.
     """
     if not texts:
         return []
@@ -39,7 +39,7 @@ def recase_batch_claude(texts, client, model):
         )
         return text, response.stop_reason
 
-    response_text, _stop_reason = _call()
+    response_text, stop_reason = _call()
     parsed = (
         _parse_response(response_text, len(texts))
         if response_text is not None
@@ -48,7 +48,23 @@ def recase_batch_claude(texts, client, model):
     if parsed is not None:
         return parsed
 
-    # Retry/fallback added in later tasks
+    logger.warning(
+        "Claude response parse failed (stop_reason=%s), retrying batch of %d",
+        stop_reason, len(texts),
+    )
+    response_text, stop_reason = _call()
+    parsed = (
+        _parse_response(response_text, len(texts))
+        if response_text is not None
+        else None
+    )
+    if parsed is not None:
+        return parsed
+
+    logger.warning(
+        "Claude response parse failed twice (stop_reason=%s), falling back to sentence case",
+        stop_reason,
+    )
     return [to_sentence_case(t) for t in texts]
 
 

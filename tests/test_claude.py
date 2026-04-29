@@ -114,3 +114,28 @@ class TestResponseTextExtraction:
         # is called per-element on each lowercase input, and the retry
         # because the second mocked call returns the parsed numbered text.
         assert result == ["Hello", "World"]
+
+    def test_zero_text_blocks_uses_retry_path(self):
+        """After Task 5's retry lands, a zero-text-blocks first response
+        should trigger a retry rather than going straight to fallback.
+        Distinguishes paths via call_count (which the does-not-raise test
+        cannot do)."""
+        client = _make_mock_anthropic_client([
+            {"content": []},
+            {"text": "1: Hello\n2: World"},
+        ])
+        result = recase_batch_claude(["hello", "world"], client, "claude-haiku-4-5")
+        assert result == ["Hello", "World"]
+        assert client.messages.create.call_count == 2
+
+
+class TestParseFailureRetry:
+    def test_parse_failure_retries_once_and_succeeds(self):
+        """First call returns garbage; second call returns valid output."""
+        client = _make_mock_anthropic_client([
+            {"text": "garbage that won't parse"},
+            {"text": "1: Hello\n2: World"},
+        ])
+        result = recase_batch_claude(["hello", "world"], client, "claude-haiku-4-5")
+        assert result == ["Hello", "World"]
+        assert client.messages.create.call_count == 2
