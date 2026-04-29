@@ -832,17 +832,18 @@ Expected: `1`
 - [ ] **Step 7: Verify the dispatch path picks the Claude backend (no network)**
 
 We don't have CLI integration tests, so do a quick in-process check that
-passing `--claude` results in a `convert_fn` derived from
+passing `--claude` results in a `convert_fn` that calls
 `convert_texts_claude` (rather than the spaCy or `--llm` paths). Run:
 
 ```bash
 ANTHROPIC_API_KEY=sk-fake python -c "
-import sys
+import sys, inspect
 from unittest.mock import patch, MagicMock
 
 # Mock anthropic.Anthropic so we don't construct a real client.
+fake_client = MagicMock()
 fake_anthropic = MagicMock()
-fake_anthropic.Anthropic = MagicMock(return_value=MagicMock())
+fake_anthropic.Anthropic = MagicMock(return_value=fake_client)
 sys.modules['anthropic'] = fake_anthropic
 
 # Mock process_file so we can inspect what convert_fn it received without
@@ -857,16 +858,29 @@ with patch('subtitle_modifier.subtitle_io.process_file', side_effect=fake_proces
     from subtitle_modifier.cli import main
     main(['--claude', 'fake.srt'])
 
+# Claude mode should not load a spaCy nlp.
 assert captured['nlp'] is None, 'spaCy nlp should be None in Claude mode'
 assert captured['convert_fn'] is not None, 'convert_fn should be wired'
-# convert_fn closes over convert_texts_claude — verify its qualname
-import inspect
-src = inspect.getclosurevars(captured['convert_fn']).nonlocals
-print('convert_fn nonlocals:', sorted(src.keys()))
+
+fn = captured['convert_fn']
+# convert_fn references convert_texts_claude as a free variable (a global,
+# from the function's perspective). Confirm the Claude backend is wired.
+globals_used = inspect.getclosurevars(fn).globals
+assert 'convert_texts_claude' in globals_used, (
+    'convert_fn should reference convert_texts_claude — wiring is wrong'
+)
+
+# _client, _model, _bs are default-argument values (NOT closure cells).
+# They live in fn.__defaults__. Confirm the mocked client is one of them.
+defaults = fn.__defaults__ or ()
+assert fake_client in defaults, (
+    'convert_fn defaults should include the mocked Anthropic client'
+)
+print('OK: dispatched to convert_texts_claude with mocked client')
 "
 ```
 
-Expected: prints something like `convert_fn nonlocals: ['_bs', '_client', '_model']` and exits cleanly. If the command exits with `Error: --llm and --claude are mutually exclusive` or `Error: no Anthropic API key`, the dispatch is broken or the env var didn't reach the subprocess.
+Expected: prints `OK: dispatched to convert_texts_claude with mocked client` and exits 0. If any assertion fails or the command exits with `Error: no Anthropic API key`, the dispatch is broken or the env var didn't reach the subprocess.
 
 - [ ] **Step 8: Clean up the test fixture**
 
