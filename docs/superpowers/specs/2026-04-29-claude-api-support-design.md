@@ -170,7 +170,7 @@ def recase_batch_claude(texts: list[str], client, model: str) -> list[str]:
 
     prompt = _build_prompt(texts)
 
-    def _call() -> str:
+    def _call() -> tuple[str | None, str | None]:
         response = client.messages.create(
             model=model,
             max_tokens=_MAX_TOKENS,
@@ -178,20 +178,37 @@ def recase_batch_claude(texts: list[str], client, model: str) -> list[str]:
             system=_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         )
-        return next(b.text for b in response.content if b.type == "text")
+        text = next(
+            (b.text for b in response.content if b.type == "text"), None
+        )
+        return text, response.stop_reason
 
-    response_text = _call()
-    parsed = _parse_response(response_text, len(texts))
+    response_text, stop_reason = _call()
+    parsed = (
+        _parse_response(response_text, len(texts))
+        if response_text is not None
+        else None
+    )
     if parsed is not None:
         return parsed
 
-    logger.warning("Claude response parse failed, retrying batch of %d", len(texts))
-    response_text = _call()
-    parsed = _parse_response(response_text, len(texts))
+    logger.warning(
+        "Claude response parse failed (stop_reason=%s), retrying batch of %d",
+        stop_reason, len(texts),
+    )
+    response_text, stop_reason = _call()
+    parsed = (
+        _parse_response(response_text, len(texts))
+        if response_text is not None
+        else None
+    )
     if parsed is not None:
         return parsed
 
-    logger.warning("Claude response parse failed twice, falling back to sentence case")
+    logger.warning(
+        "Claude response parse failed twice (stop_reason=%s), falling back to sentence case",
+        stop_reason,
+    )
     return [to_sentence_case(t) for t in texts]
 
 
@@ -346,7 +363,10 @@ Anthropic-specific code, trust the shared-pipeline coverage already in
 1. **`test_request_shape`** — assert `client.messages.create` is called with
    `model=<arg>`, `max_tokens=4096`, `temperature=0`,
    `system=_SYSTEM_PROMPT`, `messages=[{"role": "user", "content": <numbered prompt>}]`.
-   This is the contract test for the Anthropic-specific call.
+   **Also explicitly assert that no message in `messages` has
+   `role="system"`** — the most likely Anthropic-vs-OpenAI regression is
+   someone copy-pasting the OpenAI shape and putting the system prompt
+   in `messages`. This is the contract test for the Anthropic-specific call.
 2. **`test_response_text_extraction`** — given a mocked response with
    `content=[TextBlock(type="text", text="1: Hello\n2: World")]`, verify
    the parser receives the text and `recase_batch_claude` returns
@@ -393,13 +413,17 @@ duplicate coverage without adding signal.
 
 ## Documentation
 
-- **`CLAUDE.md`** — add a section under "Architecture / Module
-  responsibilities" describing `claude.py` and its relationship to
-  `llm.py` (shared symbols, mirror-not-merge approach). Add a bullet
-  to "Dependencies" listing `anthropic` (optional, native Anthropic SDK
-  for `--claude` mode). Add a "Key design decisions" bullet documenting
-  the `temperature=0` / Opus-4.7-incompatibility note. Add a command-line
-  example for `--claude` to the Commands section.
+- **`CLAUDE.md`** — concrete edit list:
+  - Add a `pip install -e ".[claude]"` line to the install block in the
+    Commands section, mirroring the existing `[llm]` line.
+  - Add a runtime `subtitle-modifier <file.srt> --claude --claude-model <model>`
+    example to the Commands section, mirroring the existing `--llm` example.
+  - Add a section under "Module responsibilities" describing `claude.py`
+    and its relationship to `llm.py` (shared symbols, mirror-not-merge).
+  - Add a bullet to "Key design decisions" documenting `temperature=0`
+    and its incompatibility with Opus 4.7.
+  - Add a bullet to "Dependencies" listing `anthropic` (optional, native
+    Anthropic SDK for `--claude` mode).
 - **`README.md`** — add a usage example for `--claude` mode and a sentence
   about installing the `[claude]` extra.
 
