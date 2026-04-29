@@ -69,3 +69,48 @@ class TestRequestShape:
         assert not any(
             m.get("role") == "system" for m in kwargs["messages"]
         )
+
+
+class TestResponseTextExtraction:
+    def test_text_only_response(self):
+        """Single text block — the canonical happy path."""
+        client = _make_mock_anthropic_client([
+            {"text": "1: Hello\n2: World"},
+        ])
+        result = recase_batch_claude(["hello", "world"], client, "claude-haiku-4-5")
+        assert result == ["Hello", "World"]
+
+    def test_multi_block_response_picks_first_text(self):
+        """If Anthropic interleaves a non-text block (e.g. thinking), pick the text."""
+        client = _make_mock_anthropic_client([
+            {"content": [
+                ("thinking", "let me think..."),
+                ("text", "1: Hello\n2: World"),
+            ]},
+        ])
+        result = recase_batch_claude(["hello", "world"], client, "claude-haiku-4-5")
+        assert result == ["Hello", "World"]
+
+    def test_zero_text_blocks_does_not_raise(self):
+        """No text block at all — should not raise StopIteration.
+
+        Task 3's body falls back to sentence case after one failed text
+        extraction. Task 5 will swap that for a retry-then-fallback path,
+        at which point this same test exercises the retry. We assert the
+        contract that matters here: the function does not raise, and it
+        returns a list of the right length.
+
+        After Task 5, a stronger version of this test
+        (test_zero_text_blocks_uses_retry_path) asserts the retry happens.
+        """
+        client = _make_mock_anthropic_client([
+            {"content": []},
+            {"text": "1: Hello\n2: World"},
+        ])
+        result = recase_batch_claude(["hello", "world"], client, "claude-haiku-4-5")
+        assert len(result) == 2
+        # Both the Task 3 fallback and the post-Task-5 retry produce
+        # ["Hello", "World"] here — the fallback because to_sentence_case
+        # is called per-element on each lowercase input, and the retry
+        # because the second mocked call returns the parsed numbered text.
+        assert result == ["Hello", "World"]
