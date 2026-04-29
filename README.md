@@ -97,7 +97,9 @@ subtitle-modifier subs.ass --claude --claude-model claude-sonnet-4-20250514
 | `--llm-api-key` | API key (default: `OPENAI_API_KEY` env var, falls back to `ollama`) |
 | `--llm-batch-size` | Subtitles per API call (default: 50) |
 | `--claude` | Enable Claude mode via native Anthropic SDK (skips spaCy entirely) |
-| `--claude-model` | Claude model name (default: `claude-haiku-4-5-20251001`) |
+| `--claude-model` | Claude model name (default: `claude-haiku-4-5`) |
+| `--claude-api-key` | Anthropic API key (default: `ANTHROPIC_API_KEY` env var) |
+| `--claude-batch-size` | Subtitles per Claude API call (default: 50) |
 
 ## How it works
 
