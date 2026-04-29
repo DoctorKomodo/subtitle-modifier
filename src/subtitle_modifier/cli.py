@@ -70,7 +70,38 @@ def main(argv: list[str] | None = None) -> None:
         help="Number of subtitle events per LLM API call (default: 50).",
     )
 
+    # Claude mode arguments
+    claude_group = parser.add_argument_group(
+        "Claude mode",
+        "Use the native Anthropic SDK for recasing.",
+    )
+    claude_group.add_argument(
+        "--claude",
+        action="store_true",
+        help="Enable Claude mode (uses the native Anthropic SDK).",
+    )
+    claude_group.add_argument(
+        "--claude-model",
+        default="claude-haiku-4-5",
+        help="Claude model ID (default: claude-haiku-4-5).",
+    )
+    claude_group.add_argument(
+        "--claude-api-key",
+        default=None,
+        help="Anthropic API key (default: ANTHROPIC_API_KEY env var).",
+    )
+    claude_group.add_argument(
+        "--claude-batch-size",
+        type=int,
+        default=50,
+        help="Number of subtitle events per Claude API call (default: 50).",
+    )
+
     args = parser.parse_args(argv)
+
+    if args.llm and args.claude:
+        print("Error: --llm and --claude are mutually exclusive.", file=sys.stderr)
+        sys.exit(1)
 
     if args.verbose:
         import logging
@@ -102,7 +133,41 @@ def main(argv: list[str] | None = None) -> None:
     convert_fn = None
     nlp = None
 
-    if args.llm:
+    if args.claude:
+        try:
+            import anthropic
+        except ImportError:
+            print(
+                "Error: anthropic package not installed. "
+                "Install it with: pip install 'subtitle-modifier[claude]'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        import os
+
+        from .claude import convert_texts_claude
+
+        api_key = args.claude_api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            print(
+                "Error: no Anthropic API key. Pass --claude-api-key or set "
+                "ANTHROPIC_API_KEY in the environment.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        client = anthropic.Anthropic(api_key=api_key)
+
+        def convert_fn(
+            texts,
+            _client=client,
+            _model=args.claude_model,
+            _bs=args.claude_batch_size,
+        ):
+            return convert_texts_claude(texts, _client, _model, batch_size=_bs)
+
+    elif args.llm:
         if not args.llm_model:
             print("Error: --llm-model is required when using --llm mode.", file=sys.stderr)
             sys.exit(1)
