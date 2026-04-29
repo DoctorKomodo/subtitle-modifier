@@ -54,13 +54,20 @@ src/subtitle_modifier/
 │                         _SYSTEM_PROMPT, _LINE_RE, _CODE_FENCE_RE,
 │                         _build_prompt, _strip_code_fences, _parse_response
 └── claude.py           ← NEW. Native Anthropic SDK path.
-                          Imports the 6 shared symbols above from .llm.
+                          Imports 3 shared symbols directly from .llm:
+                          _SYSTEM_PROMPT, _build_prompt, _parse_response.
+                          (_strip_code_fences and _CODE_FENCE_RE are used
+                          transitively via _parse_response — not imported
+                          directly. _LINE_RE is also internal to
+                          _parse_response.)
 ```
 
-The Claude module imports the system prompt, line-parsing regex, and
-response-parsing helpers from `llm.py` directly. The helpers are
-underscore-prefixed (private by convention) but importing them across
-sibling modules in the same package is normal Python; no rename is needed.
+The Claude module imports the system prompt, the prompt builder, and the
+response parser from `llm.py` directly. The parser internally strips code
+fences and applies the line-number regex, so `claude.py` doesn't need to
+touch those helpers. The imported symbols are underscore-prefixed (private
+by convention), but importing them across sibling modules in the same
+package is normal Python; no rename is needed.
 
 No changes to `converter.py`, `subtitle_io.py`, or `benchmark.py`. The Claude
 path enters via the same `convert_fn` hook in `cli.py` that `--llm` uses
@@ -110,6 +117,27 @@ Claude mode (native Anthropic SDK):
   if any user actually hits the ceiling.
 - **No `--claude-url`.** The Anthropic SDK reads `ANTHROPIC_BASE_URL` from
   the environment for users who need a proxy; not worth a CLI flag.
+
+### Asymmetry vs. `--llm-model`
+
+`--llm-model` has no default and is *required* when `--llm` is passed
+(see `cli.py:106`). `--claude-model` defaults to `claude-haiku-4-5`. The
+asymmetry is intentional: the OpenAI-compatible endpoint can be any of
+Ollama, vLLM, OpenAI, or a self-hosted gateway — there's no sensible
+default model name across all of them. Anthropic publishes a small,
+stable named-version scheme; defaulting to Haiku 4.5 (the cheapest and
+best-fit model for this task per the brainstorm) is well-defined and
+saves the user a flag in the common case. If Anthropic later
+deprecates `claude-haiku-4-5`, we update the default in a follow-up.
+
+### Silently-ignored flag combinations
+
+`--claude-*` flags (model, api-key, batch-size) are silently ignored if
+`--claude` is not set. Same is true today for `--llm-*` flags without
+`--llm`, and for `--model` (spaCy) when either `--llm` or `--claude` is
+set. This is `argparse`'s natural behavior and matches existing parity;
+no extra validation needed beyond the `--llm` / `--claude` mutual
+exclusion check.
 
 ## The `claude.py` module
 
@@ -176,17 +204,20 @@ def convert_texts_claude(
     """Full Claude conversion pipeline.
 
     Mirrors convert_texts_llm(): for each text, strip ASS tags ->
-    strip \\N markers -> lowercase -> batch -> Claude recase ->
-    validate wording invariant -> reinsert \\N markers -> reinsert ASS tags.
+    strip \\N markers -> lowercase -> batch -> Claude recase -> rstrip
+    trailing whitespace -> validate wording invariant -> reinsert \\N
+    markers -> reinsert ASS tags.
     """
     # Body is a copy of convert_texts_llm's body, with one line different:
     # the inner call switches from recase_batch(...) to recase_batch_claude(...).
 ```
 
-The body of `convert_texts_claude` is a copy of `convert_texts_llm`'s body
-with one substitution: `recase_batch(...)` → `recase_batch_claude(...)`.
-This is the duplication that "Why not extract a shared pipeline?" above
-addresses.
+The body of `convert_texts_claude` is a **literal copy** of
+`convert_texts_llm`'s body with one substitution: `recase_batch(...)` →
+`recase_batch_claude(...)`. The literal-copy is the contract — every
+intermediate step (including the `rstrip()` on each returned line that
+existed in `llm.py:210`) is preserved verbatim. This is the duplication
+that "Why not extract a shared pipeline?" above addresses.
 
 ### Anthropic-API specifics
 
@@ -194,10 +225,22 @@ addresses.
   not a `{"role": "system"}` message. This is the most visible API
   difference vs. OpenAI.
 - **Response shape:** `response.content` is a list of typed content blocks.
-  We iterate and pick the first `text` block. For a `max_tokens=4096`
-  non-streaming text-only request, there is exactly one text block, but
-  the iteration is the SDK-idiomatic shape and is robust if Anthropic
-  later interleaves other block types into a similar response.
+  We pick the first `text` block. For a `max_tokens=4096` non-streaming
+  text-only request, there is exactly one text block, but the iteration
+  is the SDK-idiomatic shape and is robust if Anthropic later interleaves
+  other block types into a similar response.
+  Use `next(..., None)` and treat `None` as a parse failure (so the
+  existing retry-then-sentence-case path catches it). A response with
+  zero text blocks shouldn't happen on a normal text-only completion,
+  but `stop_reason="refusal"` or aggressive truncation could in theory
+  produce one — falling through to the existing fallback is the right
+  outcome and avoids a `StopIteration` propagating to the user as an
+  opaque error.
+- **`stop_reason` on parse failure:** include `response.stop_reason` in the
+  warning log when `_parse_response` returns `None`. Helps debug reports
+  of "everything fell back to sentence case" (e.g.
+  `stop_reason="max_tokens"` would indicate hitting the 4096-token cap
+  for a too-large batch).
 - **`temperature=0`** for deterministic recasing on Haiku 4.5 (and Sonnet/Opus
   4.6). **This will 400 on Opus 4.7**, which removed sampling parameters
   entirely. Opus is overkill for this task; users who deliberately pass
@@ -282,6 +325,16 @@ dev = ["pytest>=7.0"]
 
 Install: `pip install -e ".[claude]"`. Mirrors the existing `[llm]` extra.
 
+The `>=0.40` floor is conservative — we use only `client.messages.create()`
+with `model`, `max_tokens`, `temperature`, `system`, and `messages` kwargs,
+and read `response.content[i].type` / `.text` / `response.stop_reason`.
+That surface has been stable across Anthropic SDK versions since the
+typed-block response shape was introduced. Model identifiers are passed
+as strings (the SDK does not validate model names client-side), so
+`claude-haiku-4-5` works against any modern SDK release. Verify the
+floor still resolves at install time during implementation; bump if
+necessary.
+
 ## Testing
 
 Light tests per the brainstorming decision (Q6, option B): focus on the
@@ -297,7 +350,11 @@ Anthropic-specific code, trust the shared-pipeline coverage already in
 2. **`test_response_text_extraction`** — given a mocked response with
    `content=[TextBlock(type="text", text="1: Hello\n2: World")]`, verify
    the parser receives the text and `recase_batch_claude` returns
-   `["Hello", "World"]`.
+   `["Hello", "World"]`. Add a second variant with
+   `content=[non_text_block, text_block]` (e.g. a placeholder
+   `type="thinking"` block) and assert the text block is still selected
+   correctly. Add a third variant with zero text blocks: assert it goes
+   through the parse-failure retry path rather than raising.
 3. **`test_parse_failure_retries_once`** — first mocked call returns garbage,
    second returns valid; assert two `messages.create` calls and successful
    parse on the retry.
@@ -338,9 +395,11 @@ duplicate coverage without adding signal.
 
 - **`CLAUDE.md`** — add a section under "Architecture / Module
   responsibilities" describing `claude.py` and its relationship to
-  `llm.py` (shared symbols, mirror-not-merge approach). Add a "Key design
-  decisions" bullet documenting the `temperature=0` / Opus-4.7-incompatibility
-  note. Add a command-line example for `--claude` to the Commands section.
+  `llm.py` (shared symbols, mirror-not-merge approach). Add a bullet
+  to "Dependencies" listing `anthropic` (optional, native Anthropic SDK
+  for `--claude` mode). Add a "Key design decisions" bullet documenting
+  the `temperature=0` / Opus-4.7-incompatibility note. Add a command-line
+  example for `--claude` to the Commands section.
 - **`README.md`** — add a usage example for `--claude` mode and a sentence
   about installing the `[claude]` extra.
 
