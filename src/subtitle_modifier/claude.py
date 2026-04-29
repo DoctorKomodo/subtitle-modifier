@@ -18,9 +18,38 @@ _DEFAULT_MODEL = "claude-haiku-4-5"
 def recase_batch_claude(texts, client, model):
     """Send a batch of texts to Claude for recasing.
 
-    Implementation in subsequent tasks.
+    Mirrors recase_batch() in llm.py: parse-fail retry once, then
+    sentence-case fallback. (Retry and fallback added in later tasks.)
     """
-    raise NotImplementedError
+    if not texts:
+        return []
+
+    prompt = _build_prompt(texts)
+
+    def _call():
+        response = client.messages.create(
+            model=model,
+            max_tokens=_MAX_TOKENS,
+            temperature=0,
+            system=_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = next(
+            (b.text for b in response.content if b.type == "text"), None
+        )
+        return text, response.stop_reason
+
+    response_text, _stop_reason = _call()
+    parsed = (
+        _parse_response(response_text, len(texts))
+        if response_text is not None
+        else None
+    )
+    if parsed is not None:
+        return parsed
+
+    # Retry/fallback added in later tasks
+    return [to_sentence_case(t) for t in texts]
 
 
 def convert_texts_claude(texts, client, model, batch_size=50):
