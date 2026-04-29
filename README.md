@@ -15,6 +15,12 @@ For LLM mode (optional):
 pip install -e ".[llm]"
 ```
 
+For Claude mode (optional):
+
+```bash
+pip install -e ".[claude]"
+```
+
 On Windows, if `pip` is not on your PATH, use `python -m pip` instead:
 
 ```bash
@@ -62,6 +68,20 @@ subtitle-modifier movie.ass --llm --llm-model llama3.2 --llm-batch-size 25
 subtitle-modifier movie.ass --llm --llm-model llama3.2 --verbose --dry-run
 ```
 
+### Claude mode
+
+Uses the native Anthropic SDK for recasing. Supports Haiku (default and recommended), Sonnet, and Opus models. `--claude` is faster and more direct than the generic OpenAI-compatible `--llm` path for Anthropic API access.
+
+```bash
+# Use Claude with the default Haiku model
+ANTHROPIC_API_KEY=sk-... subtitle-modifier subs.ass --claude
+
+# Use a different Claude model
+subtitle-modifier subs.ass --claude --claude-model claude-sonnet-4-20250514
+```
+
+> `--claude` uses the native Anthropic SDK and surfaces typed Anthropic errors. `--llm` is the generic OpenAI-compatible path, which can also reach Anthropic via Anthropic's OpenAI-compatible endpoint but loses Anthropic-native error typing.
+
 ## Options
 
 | Flag | Description |
@@ -76,6 +96,8 @@ subtitle-modifier movie.ass --llm --llm-model llama3.2 --verbose --dry-run
 | `--llm-url` | API base URL (default: `http://localhost:11434/v1` for Ollama) |
 | `--llm-api-key` | API key (default: `OPENAI_API_KEY` env var, falls back to `ollama`) |
 | `--llm-batch-size` | Subtitles per API call (default: 50) |
+| `--claude` | Enable Claude mode via native Anthropic SDK (skips spaCy entirely) |
+| `--claude-model` | Claude model name (default: `claude-haiku-4-5-20251001`) |
 
 ## How it works
 
