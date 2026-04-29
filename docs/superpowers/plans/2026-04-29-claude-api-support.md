@@ -308,31 +308,37 @@ class TestResponseTextExtraction:
         result = recase_batch_claude(["hello", "world"], client, "claude-haiku-4-5")
         assert result == ["Hello", "World"]
 
-    def test_zero_text_blocks_falls_through_to_retry(self):
+    def test_zero_text_blocks_does_not_raise(self):
         """No text block at all — should not raise StopIteration.
 
-        First call returns no text, second call returns valid output;
-        the function should retry and succeed.
+        Task 3's body falls back to sentence case after one failed text
+        extraction. Task 5 will swap that for a retry-then-fallback path,
+        at which point this same test exercises the retry. We assert the
+        contract that matters here: the function does not raise, and it
+        returns a list of the right length.
+
+        After Task 5, a stronger version of this test
+        (test_zero_text_blocks_uses_retry_path) asserts the retry happens.
         """
         client = _make_mock_anthropic_client([
             {"content": []},
             {"text": "1: Hello\n2: World"},
         ])
-        # NOTE: Task 3 implementation only makes 1 API call before falling back
-        # to sentence case. After Task 5 adds the retry, this test will pass
-        # via the retry path. For now, mark the assertion that the function
-        # does not raise:
         result = recase_batch_claude(["hello", "world"], client, "claude-haiku-4-5")
-        # Either retry-success (after Task 5) or sentence-case fallback works:
-        assert result == ["Hello", "World"] or result == ["Hello", "world"]
+        assert len(result) == 2
+        # Both the Task 3 fallback and the post-Task-5 retry produce
+        # ["Hello", "World"] here — the fallback because to_sentence_case
+        # is called per-element on each lowercase input, and the retry
+        # because the second mocked call returns the parsed numbered text.
+        assert result == ["Hello", "World"]
 ```
 
 - [ ] **Step 2: Run the new tests**
 
 Run: `pytest tests/test_claude.py::TestResponseTextExtraction -v`
-Expected: PASS for `test_text_only_response` and `test_multi_block_response_picks_first_text`. The third test should also PASS — Task 3's body falls back to `to_sentence_case` when text extraction returns `None`, producing `["Hello", "world"]` (the second word is lowercase because sentence-case only capitalizes the first letter of the input).
+Expected: 3 passed. Task 3's body falls back to `to_sentence_case` per element when text extraction returns `None`, producing `["Hello", "World"]` for the third test (each input string starts a fresh sentence-case operation, so each gets its first letter capitalized).
 
-If the third test fails because of an unhandled `StopIteration` or `AttributeError` on `None.strip()`, the implementation is wrong — go back to Task 3 and verify the `next(..., None)` and `if response_text is not None` guards are in place.
+If the third test fails with `StopIteration` or `AttributeError: 'NoneType' object has no attribute 'strip'`, the implementation is wrong — go back to Task 3 and verify both the `next(..., None)` guard and the `if response_text is not None` guard are in place.
 
 - [ ] **Step 3: Run the full test file to make sure nothing regressed**
 
@@ -439,12 +445,40 @@ def recase_batch_claude(texts, client, model):
 Run: `pytest tests/test_claude.py::TestParseFailureRetry -v`
 Expected: PASS
 
-- [ ] **Step 5: Run the full file to confirm no regressions**
+- [ ] **Step 5: Add a stronger zero-text-blocks-via-retry test**
+
+The test from Task 4 (`test_zero_text_blocks_does_not_raise`) returns the
+same value (`["Hello", "World"]`) under both Task 3's fallback and Task 5's
+retry, so it cannot distinguish the two paths. Add a sibling test that
+asserts the retry path is genuinely exercised by checking `call_count`:
+
+Append to `tests/test_claude.py` inside the existing
+`TestResponseTextExtraction` class:
+
+```python
+    def test_zero_text_blocks_uses_retry_path(self):
+        """After Task 5's retry lands, a zero-text-blocks first response
+        should trigger a retry rather than going straight to fallback.
+        Distinguishes paths via call_count (which the does-not-raise test
+        cannot do)."""
+        client = _make_mock_anthropic_client([
+            {"content": []},
+            {"text": "1: Hello\n2: World"},
+        ])
+        result = recase_batch_claude(["hello", "world"], client, "claude-haiku-4-5")
+        assert result == ["Hello", "World"]
+        assert client.messages.create.call_count == 2
+```
+
+- [ ] **Step 6: Run the full file to confirm the retry path is wired**
 
 Run: `pytest tests/test_claude.py -v`
-Expected: all 5 tests PASS. The zero-text-blocks test from Task 4 should now be exercising the retry path (`["Hello", "World"]` returned instead of the sentence-case fallback `["Hello", "world"]`).
+Expected: 6 passed. The new
+`TestResponseTextExtraction::test_zero_text_blocks_uses_retry_path`
+confirms two API calls were made (proving the retry path is active);
+the rest of the suite remains green.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add tests/test_claude.py src/subtitle_modifier/claude.py
@@ -795,15 +829,44 @@ Expected: stderr contains `Error: no Anthropic API key.` and exit code 1.
 Run: `echo $?`
 Expected: `1`
 
-- [ ] **Step 7: Verify the dispatch path picks the right backend**
+- [ ] **Step 7: Verify the dispatch path picks the Claude backend (no network)**
 
-With a fake key (the SDK validates format only on the first request, not at construction), run a dry-run that should not actually hit the API. Since this would require mocking or hitting the network, instead spot-check by passing an obviously-invalid key and confirming the error message comes from the Anthropic SDK (not from our code):
+We don't have CLI integration tests, so do a quick in-process check that
+passing `--claude` results in a `convert_fn` derived from
+`convert_texts_claude` (rather than the spaCy or `--llm` paths). Run:
 
 ```bash
-ANTHROPIC_API_KEY=sk-fake subtitle-modifier --claude /tmp/_test.srt 2>&1 | head -20
+ANTHROPIC_API_KEY=sk-fake python -c "
+import sys
+from unittest.mock import patch, MagicMock
+
+# Mock anthropic.Anthropic so we don't construct a real client.
+fake_anthropic = MagicMock()
+fake_anthropic.Anthropic = MagicMock(return_value=MagicMock())
+sys.modules['anthropic'] = fake_anthropic
+
+# Mock process_file so we can inspect what convert_fn it received without
+# actually opening a subtitle file.
+captured = {}
+def fake_process_file(path, output_path, nlp, convert_fn=None, dry_run=False):
+    captured['convert_fn'] = convert_fn
+    captured['nlp'] = nlp
+    return []
+
+with patch('subtitle_modifier.subtitle_io.process_file', side_effect=fake_process_file):
+    from subtitle_modifier.cli import main
+    main(['--claude', 'fake.srt'])
+
+assert captured['nlp'] is None, 'spaCy nlp should be None in Claude mode'
+assert captured['convert_fn'] is not None, 'convert_fn should be wired'
+# convert_fn closes over convert_texts_claude — verify its qualname
+import inspect
+src = inspect.getclosurevars(captured['convert_fn']).nonlocals
+print('convert_fn nonlocals:', sorted(src.keys()))
+"
 ```
 
-Expected: the error message references Anthropic / authentication, confirming the request was attempted (the dispatch path is wired correctly). The exact wording depends on the SDK version. If the command succeeds without hitting the network at all, the dispatch path is broken — go back and verify `convert_fn` is being passed into `process_file`.
+Expected: prints something like `convert_fn nonlocals: ['_bs', '_client', '_model']` and exits cleanly. If the command exits with `Error: --llm and --claude are mutually exclusive` or `Error: no Anthropic API key`, the dispatch is broken or the env var didn't reach the subprocess.
 
 - [ ] **Step 8: Clean up the test fixture**
 
@@ -874,13 +937,33 @@ Add a bullet under Dependencies:
 - **anthropic** (optional) — native Anthropic SDK for `--claude` mode
 ```
 
-- [ ] **Step 5: Update `README.md`**
+- [ ] **Step 5a: Read `README.md` to find the `--llm` section**
 
-Add a usage example for Claude mode and an install instruction for the `[claude]` extra. Mirror however the existing README treats `--llm` (look at the README to match its formatting). Minimum content to add:
+Run: `cat README.md`
 
-- An install line: `pip install -e ".[claude]"` next to the existing `[llm]` install line.
-- A usage example: `subtitle-modifier subs.ass --claude` (uses the default Haiku 4.5 model and reads `ANTHROPIC_API_KEY` from env).
-- A one-liner explaining the difference: "`--claude` uses the native Anthropic SDK directly; `--llm` is the generic OpenAI-compatible path that can also point at Anthropic via Anthropic's OpenAI-compatible endpoint, but loses Anthropic-native error typing."
+Identify three things: where the existing install instructions live (so the `[claude]` line can sit next to `[llm]`), where the existing `--llm` usage example lives, and the surrounding formatting (bullet style, code-fence language tags, heading levels). The next three steps mirror that style.
+
+- [ ] **Step 5b: Add the install line for the `[claude]` extra**
+
+Next to the existing `pip install -e ".[llm]"` line, add:
+
+```bash
+pip install -e ".[claude]"
+```
+
+- [ ] **Step 5c: Add a `--claude` usage example**
+
+Mirroring the existing `--llm` example's formatting, add a `--claude` example that uses the default Haiku 4.5 model and the env var:
+
+```bash
+ANTHROPIC_API_KEY=sk-... subtitle-modifier subs.ass --claude
+```
+
+- [ ] **Step 5d: Add a one-liner contrasting `--claude` and `--llm`**
+
+Near the new example or the existing `--llm` example, add a short note (one or two sentences) like:
+
+> `--claude` uses the native Anthropic SDK and surfaces typed Anthropic errors. `--llm` is the generic OpenAI-compatible path, which can also reach Anthropic via Anthropic's OpenAI-compatible endpoint but loses Anthropic-native error typing.
 
 - [ ] **Step 6: Verify the README still renders sensibly**
 
