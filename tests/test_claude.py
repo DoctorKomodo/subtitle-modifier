@@ -154,3 +154,43 @@ class TestParseFailureFallback:
         )
         assert result == ["Hello world", "Foo bar"]
         assert client.messages.create.call_count == 2
+
+
+class TestWordingInvariant:
+    def test_altered_wording_falls_back_to_sentence_case_per_event(self):
+        """Claude returns a valid numbered format but adds a character
+        (e.g. an apostrophe) — that single event falls back to sentence
+        case while the others pass through unchanged.
+        """
+        client = _make_mock_anthropic_client([
+            # Event 1 is fine; event 2 has an extra apostrophe that
+            # violates the casing-only invariant.
+            {"text": "1: Hello world\n2: It's foo"},
+        ])
+        result = convert_texts_claude(
+            ["hello world", "its foo"], client, "claude-haiku-4-5"
+        )
+        # Event 1: passes through Claude's casing
+        assert result[0] == "Hello world"
+        # Event 2: wording was altered (apostrophe added), so falls back
+        # to to_sentence_case("its foo") -> "Its foo"
+        assert result[1] == "Its foo"
+
+
+class TestPipelinePreservation:
+    def test_ass_tags_and_newline_markers_round_trip(self):
+        """Input with an ASS override tag and a \\N marker should
+        round-trip through the full pipeline: Claude sees the lowercased
+        plain text without tags or markers, and the output reinstates
+        them at the correct positions.
+        """
+        client = _make_mock_anthropic_client([
+            # Claude sees: "hello world\nfoo" lowercased with \N replaced
+            # by space at strip time. The mock returns Claude-cased text.
+            {"text": "1: Hello world foo"},
+        ])
+        result = convert_texts_claude(
+            [r"{\an8}hello world\Nfoo"], client, "claude-haiku-4-5"
+        )
+        # Tag at start preserved; \N marker reinstated where the space was
+        assert result == [r"{\an8}Hello world\Nfoo"]
