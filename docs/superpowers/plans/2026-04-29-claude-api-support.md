@@ -863,10 +863,11 @@ assert captured['nlp'] is None, 'spaCy nlp should be None in Claude mode'
 assert captured['convert_fn'] is not None, 'convert_fn should be wired'
 
 fn = captured['convert_fn']
-# convert_fn references convert_texts_claude as a free variable (a global,
-# from the function's perspective). Confirm the Claude backend is wired.
-globals_used = inspect.getclosurevars(fn).globals
-assert 'convert_texts_claude' in globals_used, (
+# convert_texts_claude is imported inside main() (function-local import),
+# so from convert_fn's perspective it's a free variable bound to the
+# enclosing main() scope -- i.e. a nonlocal/closure cell, not a global.
+nonlocals_used = inspect.getclosurevars(fn).nonlocals
+assert 'convert_texts_claude' in nonlocals_used, (
     'convert_fn should reference convert_texts_claude — wiring is wrong'
 )
 
